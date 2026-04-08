@@ -1,0 +1,29 @@
+{
+    "dockerComposeFile": [
+        "compose.yaml"
+    ],
+    "service": "workspace",
+    "workspaceFolder": "/home/developer/ros2_ws/src",
+    "shutdownAction": "stopCompose",
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "terminal.integrated.profiles.linux": {
+                    "bash": {
+                        "path": "bash",
+                        "icon": "terminal-bash"
+                    }
+                },
+                "terminal.integrated.defaultProfile.linux": "bash"
+            },
+            "extensions": [
+                "ms-python.python",
+                "ms-vscode.cmake-tools",
+                "mechatroner.rainbow-csv",
+                "redhat.vscode-xml",
+                "njpwerner.autodocstring",
+                "ajshort.msg"
+            ]
+        }
+    }
+}
