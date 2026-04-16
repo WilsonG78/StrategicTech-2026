@@ -1,4 +1,16 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  Quick-start commands for the ROS 2 session
+#  Run these in order when starting a new terminal session on the RPi or laptop.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Kill any leftover ROS 2 processes from a previous session
 pkill -9 -f ros
+
+# Use CycloneDDS as the middleware (lower latency than default FastDDS)
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+
+# Set the ROS domain ID – must be identical on all machines in the network
 export ROS_DOMAIN_ID=42
+
+# Start the ROS 2 background daemon (speeds up CLI commands like ros2 topic list)
 ros2 daemon start
