@@ -1,4 +1,11 @@
-devastator_photos*
+photos/
+preprocessed_photos/
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.tiff
+*.webp
 .CLAUDE.MD
 # Windows Zone.Identifier metadata files (created when downloading on Windows)
 *:Zone.Identifier
