@@ -1,0 +1,4 @@
+pkill -9 -f ros
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export ROS_DOMAIN_ID=42
+ros2 daemon start
