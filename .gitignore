@@ -1,3 +1,7 @@
+devastator_photos*
+.CLAUDE.MD
+# Windows Zone.Identifier metadata files (created when downloading on Windows)
+*:Zone.Identifier
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
