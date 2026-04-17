@@ -1,5 +1,14 @@
 photos/
 preprocessed_photos/
+drone_model-2/
+runs/
+.env
+# Roboflow datasets
+**/devastator_model*/
+# YOLO model weights
+*.pt
+# Exported models
+*.onnx
 *.jpg
 *.jpeg
 *.png
