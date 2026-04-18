@@ -12,6 +12,7 @@
   <depend>sensor_msgs</depend>
   <depend>uav_msgs</depend>
   <depend>cv_bridge</depend>
+  <depend>python3-opencv</depend>
   <depend>foxglove_msgs</depend>
   <depend>launch</depend>
   <depend>launch_ros</depend>
