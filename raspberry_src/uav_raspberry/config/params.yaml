@@ -1,0 +1,58 @@
+# config/params.yaml
+# Parameters for the ArduCopter drone system.
+# Loaded by launch/system.launch.py and passed to both nodes.
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Module 1 – qr_lawnmower_node
+# ──────────────────────────────────────────────────────────────────────────────
+qr_lawnmower_node:
+  ros__parameters:
+
+    # MAVSDK connection
+    mavsdk_address: "udp://:14550"
+
+    # Camera optics
+    camera_fov_deg: 70.0          # horizontal field of view [degrees]
+
+    # QR alignment P-controller
+    p_gain: 0.3                   # proportional gain [m/s per m offset]
+    max_velocity: 0.5             # clamp for vn / ve setpoints [m/s]
+    center_threshold_px: 15       # pixel dead-band for centring
+
+    # Altitude setpoints
+    patrol_alt_m: 3.0             # normal patrol / lawnmower altitude [m AGL]
+    scan_alt_m:   2.5             # descend-to altitude for QR scan   [m AGL]
+
+    # Wait phase
+    wait_time_sec: 5.0            # hover time at scan altitude [s]
+
+    # Lawnmower grid (local NED, origin = take-off point)
+    grid_length_m:  5.0          # North extent [m]
+    grid_width_m:   5.0          # East  extent [m]
+    line_spacing_m:  2.0          # spacing between parallel legs [m]
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Module 2 – logistic_map_node
+# ──────────────────────────────────────────────────────────────────────────────
+logistic_map_node:
+  ros__parameters:
+
+    # MAVSDK connection (same FC, separate system object)
+    mavsdk_address: "udp://:14550"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# telemetry_node  (uav_raspberry)
+# ──────────────────────────────────────────────────────────────────────────────
+telemetry_node:
+  ros__parameters:
+    connection_url: "udp://:14550"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# camera_streamer  (ugv_raspberry)
+# ──────────────────────────────────────────────────────────────────────────────
+camera_streamer:
+  ros__parameters:
+    width: 640
+    height: 480
+    fps: 30
+    jpeg_quality: 50

@@ -11,6 +11,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', ['launch/uav.launch.py']),
+        ('share/' + package_name + '/config', ['config/params.yaml']),
     ],
     install_requires=['setuptools', 'mavsdk'],
     zip_safe=True,
@@ -24,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'telemetry_node = uav_raspberry.telemetry_node:main',
-        ],
+            'logistic_map_node = uav_raspberry.logistic_map:main',
+            'qr_lawnmower_node = uav_raspberry.qr_lawnmower:main'],
     },
 )

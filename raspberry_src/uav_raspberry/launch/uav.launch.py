@@ -1,8 +1,28 @@
+"""
+launch/uav.launch.py
+====================
+Launches the full ArduCopter drone system:
+
+  1. qr_lawnmower_node  – mission management, vision, safety
+  2. logistic_map_node  – chaos-map RC visualisation
+  3. foxglove_bridge    – WebSocket bridge on port 8765
+
+Parameters are loaded from  config/params.yaml  relative to the
+*uav_system* package share directory.
+
+Shutdown policy: if either mission-critical node dies, the entire
+launch is terminated so the operator is immediately aware.
+"""
+
+import os
+
+from ament_index_python.packages import get_package_share_directory
+
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
-    LogInfo,
     EmitEvent,
+    LogInfo,
     RegisterEventHandler,
 )
 from launch.event_handlers import OnProcessExit
@@ -11,93 +31,114 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-def generate_launch_description():
+def generate_launch_description() -> LaunchDescription:
+    pkg_share = get_package_share_directory("uav_raspberry")
+    params_file = os.path.join(pkg_share, "config", "params.yaml")
+
+    # ── Launch arguments (CLI overrides) ──────────────────────────────────────
     args = [
-        DeclareLaunchArgument(
-            "connection_url",
-            default_value="serial:///dev/ttyAMA0:115200",
-            description="MAVSDK connection URL to ArduPilot",
-        ),
-        DeclareLaunchArgument(
-            "cam_width",
-            default_value="640",
-            description="Camera image width [px]",
-        ),
-        DeclareLaunchArgument(
-            "cam_height",
-            default_value="480",
-            description="Camera image height [px]",
-        ),
-        DeclareLaunchArgument(
-            "fps",
-            default_value="30",
-            description="Camera FPS",
-        ),
-        DeclareLaunchArgument(
-            "jpeg_quality",
-            default_value="50",
-            description="JPEG quality (0-100). Lower = less latency",
-        ),
         DeclareLaunchArgument(
             "log_level",
             default_value="info",
-            description="Log level: debug/info/warn/error",
+            description="ROS 2 log level: debug / info / warn / error",
+        ),
+        DeclareLaunchArgument(
+            "foxglove_port",
+            default_value="8765",
+            description="Foxglove WebSocket bridge port",
         ),
     ]
 
-    # ── Telemetry node (MAVSDK → /data) ──────────────────────────────────────
-    telemetry_node = Node(
-        package    = "uav_raspberry",
-        executable = "telemetry_node",
-        name       = "telemetry_node",
-        output     = "screen",
-        arguments  = ["--ros-args", "--log-level", LaunchConfiguration("log_level")],
-        parameters = [{
-            "connection_url": LaunchConfiguration("connection_url"),
-        }],
+    log_level = LaunchConfiguration("log_level")
+    foxglove_port = LaunchConfiguration("foxglove_port")
+
+    # ── qr_lawnmower_node ─────────────────────────────────────────────────────
+    qr_node = Node(
+        package="uav_raspberry",
+        executable="qr_lawnmower_node",
+        name="qr_lawnmower_node",
+        output="screen",
+        emulate_tty=True,
+        arguments=["--ros-args", "--log-level", log_level],
+        parameters=[params_file],
     )
 
-    # ── Camera streamer (libcamera + GStreamer → /camera/image/compressed) ───
+    # ── logistic_map_node ─────────────────────────────────────────────────────
+    logistic_node = Node(
+        package="uav_raspberry",
+        executable="logistic_map_node",
+        name="logistic_map_node",
+        output="screen",
+        emulate_tty=True,
+        arguments=["--ros-args", "--log-level", log_level],
+        parameters=[params_file],
+    )
+
+    # ── foxglove_bridge ───────────────────────────────────────────────────────
+    foxglove_node = Node(
+        package="foxglove_bridge",
+        executable="foxglove_bridge",
+        name="foxglove_bridge",
+        output="screen",
+        parameters=[
+            {
+                "port": foxglove_port,
+                "address": "0.0.0.0",
+                "tls": False,
+                "topic_whitelist": [".*"],   # expose all topics to Studio
+            }
+        ],
+    )
+
+    # ── Shutdown cascade: if either mission node dies → kill launch ───────────
+    shutdown_on_qr_exit = RegisterEventHandler(
+        OnProcessExit(
+            target_action=qr_node,
+            on_exit=[
+                LogInfo(msg="[uav_system] qr_lawnmower_node exited – shutting down."),
+                EmitEvent(event=Shutdown()),
+            ],
+        )
+    )
+
+    shutdown_on_logistic_exit = RegisterEventHandler(
+        OnProcessExit(
+            target_action=logistic_node,
+            on_exit=[
+                LogInfo(msg="[uav_system] logistic_map_node exited – shutting down."),
+                EmitEvent(event=Shutdown()),
+            ],
+        )
+    )
+    
+    # ── ugv_raspberry: camera_streamer ────────────────────────────────────────
     camera_node = Node(
-        package    = "ugv_raspberry",
-        executable = "camera_streamer",
-        name       = "camera_streamer",
-        output     = "screen",
-        arguments  = ["--ros-args", "--log-level", LaunchConfiguration("log_level")],
-        parameters = [{
-            "width":        LaunchConfiguration("cam_width"),
-            "height":       LaunchConfiguration("cam_height"),
-            "fps":          LaunchConfiguration("fps"),
-            "jpeg_quality": LaunchConfiguration("jpeg_quality"),
-        }],
+        package="ugv_raspberry",
+        executable="camera_streamer",
+        name="camera_streamer",
+        output="screen",
+        parameters=[params_file],
     )
 
-    # ── Shutdown everything if either node dies ───────────────────────────────
-    shutdown_on_telemetry_exit = RegisterEventHandler(
-        OnProcessExit(
-            target_action = telemetry_node,
-            on_exit       = [
-                LogInfo(msg="TELEMETRY NODE exited – shutting down launch."),
-                EmitEvent(event=Shutdown()),
-            ],
-        )
+    # ── ugv_raspberry: telemetry_node ─────────────────────────────────────────
+    telemetry_node = Node(
+        package="uav_raspberry",
+        executable="telemetry_node",
+        name="telemetry_node",
+        output="screen",
+        parameters=[params_file]
     )
 
-    shutdown_on_camera_exit = RegisterEventHandler(
-        OnProcessExit(
-            target_action = camera_node,
-            on_exit       = [
-                LogInfo(msg="CAMERA STREAMER exited – shutting down launch."),
-                EmitEvent(event=Shutdown()),
-            ],
-        )
+    return LaunchDescription(
+        [
+            *args,
+            LogInfo(msg="[uav_system] Starting drone system…"),
+            qr_node,
+            logistic_node,
+            foxglove_node,
+            camera_node,
+            telemetry_node,
+            shutdown_on_qr_exit,
+            shutdown_on_logistic_exit,
+        ]
     )
-
-    return LaunchDescription([
-        *args,
-        LogInfo(msg="[uav.launch] Starting telemetry_node + camera_streamer..."),
-        telemetry_node,
-        camera_node,
-        shutdown_on_telemetry_exit,
-        shutdown_on_camera_exit,
-    ])
