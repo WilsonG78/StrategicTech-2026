@@ -1,12 +1,12 @@
 // camera_streamer.cpp
-// Węzeł ROS 2 (C++) – stream z Camera Module 3 przez libcamera + GStreamer
+// ROS 2 node (C++) – streams Camera Module 3 via libcamera + GStreamer
 //
-// Priorytet: MINIMALNE OPÓŹNIENIE
-// Pipeline: libcamerasrc → jpegenc (q=40–60) → appsink → /camera/image/compressed
+// Priority: MINIMUM LATENCY
+// Pipeline: libcamerasrc → jpegenc (q=40-60) → appsink → /camera/image/compressed
 //
-// Na laptopie podgląd: ros2 run image_transport republish compressed raw --ros-args
+// Preview on laptop: ros2 run image_transport republish compressed raw --ros-args
 //   -r in/compressed:=/camera/image/compressed
-// Lub rqt_image_view bezpośrednio.
+// Or use rqt_image_view directly.
 
 #include <cstring>
 #include <memory>
@@ -19,24 +19,24 @@
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/compressed_image.hpp"
 
-// ─── Konfiguracja ─────────────────────────────────────────────────────────────
+// ─── Configuration ────────────────────────────────────────────────────────────
 
 static constexpr int    CAM_WIDTH     = 640;
 static constexpr int    CAM_HEIGHT    = 480;
 static constexpr int    CAM_FPS       = 30;
-static constexpr int    JPEG_QUALITY  = 50;   // 30–60 = dobry balans latencja/jakość
+static constexpr int    JPEG_QUALITY  = 50;   // 30-60 = good latency/quality trade-off
 static constexpr char   TOPIC[]       = "/camera/image/compressed";
 static constexpr char   FRAME_ID[]    = "camera_frame";
-static constexpr int    QOS_DEPTH     = 5;    // mały bufor = świeże klatki
+static constexpr int    QOS_DEPTH     = 5;    // small buffer = fresh frames
 
 
-// ─── Węzeł ────────────────────────────────────────────────────────────────────
+// ─── Node ─────────────────────────────────────────────────────────────────────
 
 class CameraStreamer : public rclcpp::Node {
 public:
     CameraStreamer() : Node("camera_streamer") {
 
-        // Parametry nadpisywalne z CLI / launch
+        // Parameters overridable from CLI / launch file
         declare_parameter("width",        CAM_WIDTH);
         declare_parameter("height",       CAM_HEIGHT);
         declare_parameter("fps",          CAM_FPS);
@@ -50,12 +50,12 @@ public:
         // ── GStreamer init ────────────────────────────────────────────────
         gst_init(nullptr, nullptr);
 
-        // Pipeline zoptymalizowany pod minimalne opóźnienie:
-        //  • sync=false na appsink  → nie czeka na zegar
-        //  • drop=true              → porzuca stare klatki gdy nie nadążamy
-        //  • max-buffers=1          → zawsze najświeższa klatka
-        //  • NV12 → videoconvert → jpegenc  (szybszy niż MJPEG z kamery)
-        //  • Dla jeszcze mniejszego opóźnienia: zmień jpegenc na avenc_mjpeg
+        // Pipeline optimized for minimum latency:
+        //  • sync=false on appsink  → does not wait for clock
+        //  • drop=true              → drops old frames when we can't keep up
+        //  • max-buffers=1          → always the freshest frame
+        //  • NV12 → videoconvert → jpegenc  (faster than in-camera MJPEG)
+        //  • For even lower latency: replace jpegenc with avenc_mjpeg
         std::string pipeline_str =
             "libcamerasrc ! "
             "video/x-raw,width=" + std::to_string(w) + ",height=" + std::to_string(h) +
@@ -70,29 +70,29 @@ public:
         GError * err = nullptr;
         pipeline_ = gst_parse_launch(pipeline_str.c_str(), &err);
         if (!pipeline_ || err) {
-            std::string msg = err ? err->message : "nieznany błąd";
+            std::string msg = err ? err->message : "unknown error";
             if (err) g_error_free(err);
             throw std::runtime_error("GStreamer parse_launch: " + msg);
         }
 
-        // ── appsink: callback na nową klatkę ─────────────────────────────
+        // ── appsink: callback on new frame ───────────────────────────────
         sink_ = gst_bin_get_by_name(GST_BIN(pipeline_), "sink");
-        if (!sink_) throw std::runtime_error("Nie znaleziono appsink 'sink'");
+        if (!sink_) throw std::runtime_error("appsink 'sink' not found");
 
         g_signal_connect(sink_, "new-sample",
             G_CALLBACK(CameraStreamer::on_new_sample_static), this);
 
         // ── Publisher ─────────────────────────────────────────────────────
         auto qos = rclcpp::QoS(QOS_DEPTH)
-            .reliability(rclcpp::ReliabilityPolicy::BestEffort);  // UDP-like, bez retransmisji
+            .reliability(rclcpp::ReliabilityPolicy::BestEffort);  // UDP-like, no retransmission
         pub_ = create_publisher<sensor_msgs::msg::CompressedImage>(TOPIC, qos);
 
         // ── Start pipeline ────────────────────────────────────────────────
         GstStateChangeReturn ret = gst_element_set_state(pipeline_, GST_STATE_PLAYING);
         if (ret == GST_STATE_CHANGE_FAILURE)
-            throw std::runtime_error("Nie można uruchomić pipeline GStreamer");
+            throw std::runtime_error("Failed to start GStreamer pipeline");
 
-        // Monit o błędach z magistrali GStreamer w osobnym wątku
+        // Monitor GStreamer bus for errors in a separate thread
         bus_thread_ = std::thread([this]{ run_bus_loop(); });
 
         RCLCPP_INFO(get_logger(),
@@ -118,7 +118,7 @@ private:
 
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr pub_;
 
-    // ── Callback GStreamer (wywoływany z wątku GStreamera) ────────────────
+    // ── GStreamer callback (called from the GStreamer thread) ─────────────
     static GstFlowReturn on_new_sample_static(GstAppSink * /*sink*/, gpointer data) {
         return static_cast<CameraStreamer *>(data)->on_new_sample();
     }
@@ -144,7 +144,7 @@ private:
         return GST_FLOW_OK;
     }
 
-    // ── Magistrala GStreamer – obsługa błędów ─────────────────────────────
+    // ── GStreamer bus – error handling ────────────────────────────────────
     void run_bus_loop() {
         GstBus * bus = gst_element_get_bus(pipeline_);
         while (bus_running_) {
@@ -172,7 +172,7 @@ private:
                     break;
                 }
                 case GST_MESSAGE_EOS:
-                    RCLCPP_WARN(get_logger(), "GStreamer EOS – koniec strumienia");
+                    RCLCPP_WARN(get_logger(), "GStreamer EOS – stream ended");
                     break;
                 default: break;
             }
@@ -190,7 +190,7 @@ int main(int argc, char ** argv) {
     try {
         rclcpp::spin(std::make_shared<CameraStreamer>());
     } catch (const std::exception & e) {
-        RCLCPP_FATAL(rclcpp::get_logger("camera_streamer"), "Błąd: %s", e.what());
+        RCLCPP_FATAL(rclcpp::get_logger("camera_streamer"), "Fatal error: %s", e.what());
     }
     rclcpp::shutdown();
     return 0;

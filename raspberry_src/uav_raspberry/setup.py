@@ -11,20 +11,18 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'mavsdk'],
     zip_safe=True,
-    maintainer='waldemar',
-    maintainer_email='latawiecfilip@gmail.com',
-    description='TODO: Package description',
+    maintainer='StrategicTech',
+    maintainer_email='strategic.tech.pl@gmail.com',
+    description='UAV Raspberry Pi node – telemetry bridge between ArduPilot (MAVSDK) and ROS 2',
     license='Apache-2.0',
     extras_require={
-        'test': [
-            'pytest',
-        ],
+        'test': ['pytest'],
     },
     entry_points={
         'console_scripts': [
-            'control_keys = uav_raspberry.control_keys:main'
+            'telemetry_node = uav_raspberry.telemetry_node:main',
         ],
     },
 )
