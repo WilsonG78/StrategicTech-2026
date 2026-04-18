@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(robot_control)
+project(ugv_raspberry)
 
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 17)
@@ -18,7 +18,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(GST      REQUIRED gstreamer-1.0)
 pkg_check_modules(GST_APP  REQUIRED gstreamer-app-1.0)
 
-add_executable(motor_controller robot_control/motor_controller.cpp)
+add_executable(motor_controller ugv_raspberry/motor_controller.cpp)
 
 target_include_directories(motor_controller PRIVATE ${GPIOD_INCLUDE_DIR})
 
@@ -32,7 +32,7 @@ ament_target_dependencies(motor_controller
   geometry_msgs
 )
 
-add_executable(camera_streamer robot_control/camera_streamer.cpp)
+add_executable(camera_streamer ugv_raspberry/camera_streamer.cpp)
 
 target_include_directories(camera_streamer PRIVATE
   ${GST_INCLUDE_DIRS}
@@ -63,7 +63,7 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME}
 )
 
-install(DIRECTORY launch config
+install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}
 )
 
