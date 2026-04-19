@@ -3,12 +3,14 @@ launch/uav.launch.py
 ====================
 Launches the full ArduCopter drone system:
 
-  1. qr_lawnmower_node  – mission management, vision, safety
-  2. logistic_map_node  – chaos-map RC visualisation
-  3. foxglove_bridge    – WebSocket bridge on port 8765
+  1. scout_mission_node      – two-phase lawnmower + QR inspection
+  2. logistic_map_node       – chaos-map RC visualisation (Foxglove)
+  3. foxglove_bridge         – WebSocket bridge on port 8765
+  4. camera_streamer_focus   – GStreamer + altitude-driven focus (ugv_raspberry)
+  5. telemetry_node          – MAVSDK → /data telemetry bridge
 
 Parameters are loaded from  config/params.yaml  relative to the
-*uav_system* package share directory.
+uav_raspberry package share directory.
 
 Shutdown policy: if either mission-critical node dies, the entire
 launch is terminated so the operator is immediately aware.
@@ -25,6 +27,7 @@ from launch.actions import (
     LogInfo,
     RegisterEventHandler,
 )
+from launch.conditions import IfCondition, UnlessCondition
 from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
 from launch.substitutions import LaunchConfiguration
@@ -47,20 +50,27 @@ def generate_launch_description() -> LaunchDescription:
             default_value="8765",
             description="Foxglove WebSocket bridge port",
         ),
+        DeclareLaunchArgument(
+            "test_mode",
+            default_value="false",
+            description="Test mode: disables shutdown cascade so package discovery "
+                        "can be verified without a drone or camera connected",
+        ),
     ]
 
-    log_level = LaunchConfiguration("log_level")
+    log_level     = LaunchConfiguration("log_level")
     foxglove_port = LaunchConfiguration("foxglove_port")
+    test_mode     = LaunchConfiguration("test_mode")
 
-    # ── qr_lawnmower_node ─────────────────────────────────────────────────────
+    # ── scout_mission_node ────────────────────────────────────────────────────
     qr_node = Node(
         package="uav_raspberry",
-        executable="qr_lawnmower_node",
-        name="qr_lawnmower_node",
+        executable="scout_mission_node",
+        name="scout_mission_node",
         output="screen",
         emulate_tty=True,
         arguments=["--ros-args", "--log-level", log_level],
-        parameters=[params_file],
+        parameters=[params_file, {"dry_run": test_mode}],
     )
 
     # ── logistic_map_node ─────────────────────────────────────────────────────
@@ -91,14 +101,16 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ── Shutdown cascade: if either mission node dies → kill launch ───────────
+    # Disabled in test_mode so package-discovery runs without real hardware.
     shutdown_on_qr_exit = RegisterEventHandler(
         OnProcessExit(
             target_action=qr_node,
             on_exit=[
-                LogInfo(msg="[uav_system] qr_lawnmower_node exited – shutting down."),
+                LogInfo(msg="[uav_system] scout_mission_node exited – shutting down."),
                 EmitEvent(event=Shutdown()),
             ],
-        )
+        ),
+        condition=UnlessCondition(test_mode),
     )
 
     shutdown_on_logistic_exit = RegisterEventHandler(
@@ -108,19 +120,31 @@ def generate_launch_description() -> LaunchDescription:
                 LogInfo(msg="[uav_system] logistic_map_node exited – shutting down."),
                 EmitEvent(event=Shutdown()),
             ],
-        )
+        ),
+        condition=UnlessCondition(test_mode),
     )
-    
-    # ── ugv_raspberry: camera_streamer ────────────────────────────────────────
+
+    # ── ugv_raspberry: camera_streamer_focus ─────────────────────────────────
     camera_node = Node(
         package="ugv_raspberry",
-        executable="camera_streamer",
-        name="camera_streamer",
+        executable="camera_streamer_focus",
+        name="camera_streamer_focus",
         output="screen",
         parameters=[params_file],
     )
 
-    # ── ugv_raspberry: telemetry_node ─────────────────────────────────────────
+    shutdown_on_camera_exit = RegisterEventHandler(
+        OnProcessExit(
+            target_action=camera_node,
+            on_exit=[
+                LogInfo(msg="[uav_system] camera_streamer_focus exited – shutting down."),
+                EmitEvent(event=Shutdown()),
+            ],
+        ),
+        condition=UnlessCondition(test_mode),
+    )
+
+    # ── uav_raspberry: telemetry_node ─────────────────────────────────────────
     telemetry_node = Node(
         package="uav_raspberry",
         executable="telemetry_node",
@@ -132,7 +156,11 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
             *args,
-            LogInfo(msg="[uav_system] Starting drone system…"),
+            LogInfo(msg="[uav_system] Starting drone system..."),
+            LogInfo(
+                msg="[uav_system] TEST MODE – shutdown cascade disabled.",
+                condition=IfCondition(test_mode),
+            ),
             qr_node,
             logistic_node,
             foxglove_node,
@@ -140,5 +168,6 @@ def generate_launch_description() -> LaunchDescription:
             telemetry_node,
             shutdown_on_qr_exit,
             shutdown_on_logistic_exit,
+            shutdown_on_camera_exit,
         ]
     )

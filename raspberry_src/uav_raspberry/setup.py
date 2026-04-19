@@ -6,12 +6,14 @@ setup(
     name=package_name,
     version='0.0.0',
     packages=find_packages(exclude=['test']),
+    package_data={package_name: []},
     data_files=[
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', ['launch/uav.launch.py']),
         ('share/' + package_name + '/config', ['config/params.yaml']),
+        ('share/' + package_name + '/tests', []),
     ],
     install_requires=['setuptools', 'mavsdk'],
     zip_safe=True,
@@ -26,6 +28,6 @@ setup(
         'console_scripts': [
             'telemetry_node = uav_raspberry.telemetry_node:main',
             'logistic_map_node = uav_raspberry.logistic_map:main',
-            'qr_lawnmower_node = uav_raspberry.qr_lawnmower:main'],
+            'scout_mission_node = uav_raspberry.scout_mission:main'],
     },
 )

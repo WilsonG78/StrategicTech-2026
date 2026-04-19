@@ -27,7 +27,7 @@ class TelemetryNode(Node):
     def __init__(self) -> None:
         super().__init__("telemetry_node")
 
-        self.declare_parameter("connection_url", "serial:///dev/ttyAMA0:115200")
+        self.declare_parameter("connection_url", "udpin://127.0.0.1:14550")
 
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -68,7 +68,7 @@ class TelemetryNode(Node):
         )
         while rclpy.ok():
             self.get_logger().info(f"Connecting to ArduPilot at {url} …")
-            system = System()
+            system = System(port=50051)
             try:
                 await system.connect(system_address=url)
 

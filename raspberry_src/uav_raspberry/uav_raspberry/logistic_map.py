@@ -72,7 +72,7 @@ class LogisticMapNode(Node):
     def __init__(self) -> None:
         super().__init__("logistic_map_node")
 
-        self.declare_parameter("mavsdk_address", "udp://:14550")
+        self.declare_parameter("mavsdk_address", "udpin://127.0.0.1:14551")
 
         qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
@@ -108,7 +108,7 @@ class LogisticMapNode(Node):
 
     async def _rc_monitor_loop(self) -> None:
         address: str = self.get_parameter("mavsdk_address").value
-        drone = System()
+        drone = System(port=50052)
         while rclpy.ok():
             try:
                 await drone.connect(system_address=address)
