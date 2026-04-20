@@ -1,0 +1,151 @@
+# mission_params.yaml
+# Single source of truth for the two-phase UAV reconnaissance mission.
+# All tuneable values MUST come from this file - never hardcoded.
+#
+# Hardware: RPi 5 8GB + SpeedyBee F405 V4 (ArduPilot) + RPi Camera Module 3
+#           + Flywoo Goku GM10 Pro V3 GPS + TBS Source One V5 5" + 6S 2200mAh
+#
+# MAVLink routing: mavlink-router fans the FC stream out to two local UDP
+# ports so telemetry_node (14540) and run_mission (14541) do not collide.
+
+# ─── telemetry_node ───────────────────────────────────────────────────────────
+telemetry_node:
+  ros__parameters:
+    connection_url: "udp://:14540"
+    publish_hz: 2.0
+
+# ─── run_mission (orchestrator + mission logic) ───────────────────────────────
+run_mission:
+  ros__parameters:
+
+    # ── MAVSDK / MAVLink ──────────────────────────────────────────────────────
+    mavsdk_system_address: "udp://:14541"
+    mavsdk_server_port: 50051
+
+    # ── Field geometry (metres, local NED from home) ──────────────────────────
+    # Legs run along the length axis (North) so the drone flies the 50 m
+    # direction and only steps East between legs -> fewer turns.
+    field_length_m: 50.0                  # North extent (long axis)
+    field_width_m:  30.0                  # East extent  (short axis)
+    scan_overlap_pct: 25.0
+
+    # ── Home GPS + pre-applied drift correction ───────────────────────────────
+    home_latitude:  50.067100
+    home_longitude: 19.912800
+    home_altitude_amsl_m: 220.0
+    # Flywoo GM10 Pro V3 ~1m CEP -> shift waypoints by a cell to the north
+    drift_correction_lat_deg:  9.0e-6     # ~+1 m north baked into waypoints
+    drift_correction_lon_deg:  0.0
+
+    # ── Flight profile ────────────────────────────────────────────────────────
+    scan_altitude_m: 3.8                  # Phase 1 lawnmower AGL (3.5-4m)
+    scan_speed_m_s: 2.2                   # along scan legs (2-2.5 m/s)
+    identify_altitude_m: 2.5              # Phase 2 descend-to altitude
+    identify_speed_m_s: 1.5
+    takeoff_altitude_m: 3.8
+    waypoint_tolerance_m: 1.0
+
+    # ── Camera Module 3 (IMX708) optics ──────────────────────────────────────
+    # Sensor: 6.287 x 4.712 mm, focal 4.74 mm, native 4608 x 2592.
+    # Horizontal FOV 66 deg (use this everywhere for GSD / swath).
+    camera_fov_horizontal_deg: 66.0
+    camera_fov_vertical_deg:   41.0
+    camera_focal_length_mm:    4.74
+    camera_sensor_width_mm:    6.287
+    camera_sensor_height_mm:   4.712
+    image_width_px:  1920                 # capture resolution for mission CV
+    image_height_px: 1080
+
+    # Mission frame source: JPEGs published by ugv_raspberry/camera_streamer_focus
+    camera_topic: "/ugv_camera/image_raw/compressed"
+
+    # ── Grey-crate detection (HSV + contour) ──────────────────────────────────
+    hsv_h_min:   0
+    hsv_h_max: 180
+    hsv_s_min:   0
+    hsv_s_max:  60            # low saturation -> grey
+    hsv_v_min:  60
+    hsv_v_max: 200
+    min_contour_area_px:  1500
+    max_contour_area_px: 150000
+    aspect_ratio_min: 0.5
+    aspect_ratio_max: 2.0
+    detection_consecutive_frames: 3
+    target_dedup_radius_m: 1.2
+
+    # ── Phase 2 camera-lock P-controller ──────────────────────────────────────
+    lock_kp: 0.004
+    lock_max_velocity_m_s: 0.3
+    lock_center_tolerance_px: 25
+    lock_hold_seconds_min: 5.0
+    lock_hold_seconds_max: 8.0
+    lock_stable_frames: 10
+
+    # ── YOLO + QR ─────────────────────────────────────────────────────────────
+    yolo_model_path: "~/models/yolov8n.pt"
+    yolo_confidence_threshold: 0.35
+    yolo_imgsz: 640
+    qr_max_attempts: 40
+
+    # ── Battery monitor (6S Tattu R-Line 2200 mAh 95C) ───────────────────────
+    battery_voltage_warning_v:  22.4      # 3.73 V/cell -> advisory warning
+    battery_voltage_critical_v: 21.6      # 3.60 V/cell -> auto-RTL regardless
+    battery_poll_interval_s:    2.0
+
+    # ── Drop mechanism (TowerPro MG995 on FC servo rail) ─────────────────────
+    drop_servo_index:     9               # MAVLink DO_SET_SERVO index
+    drop_servo_open_us:   2000            # 90 deg open
+    drop_servo_close_us:  1000            # closed/rest
+    drop_servo_hold_s:    1.5
+
+    # ── ROS 2 output topics ───────────────────────────────────────────────────
+    topic_detection_report: "/mission/detection"
+    topic_detection_organizer: "/detection"
+    topic_mission_map: "/mission/map/compressed"
+    topic_annotated_image: "/mission/annotated/compressed"
+    topic_object_gps: "/mission/object_gps"
+
+    # ── Logging ───────────────────────────────────────────────────────────────
+    log_dir: "logs"
+    log_level: "INFO"
+
+# ─── camera_streamer_focus (ugv_raspberry - C++ GStreamer) ───────────────────
+# Focus is V4L2-driven (focus_absolute 0=inf, 1000=macro) via linear map:
+#   alt_min_m -> focus_at_alt_min  (close target)
+#   alt_max_m -> focus_at_alt_max  (far target)
+# Site-calibrated defaults below are approximate values for the IMX708 lens.
+camera_streamer_focus:
+  ros__parameters:
+    width: 1920
+    height: 1080
+    fps: 30
+    jpeg_quality: 70
+    topic: "/ugv_camera/image_raw/compressed"
+    v4l2_subdev: "/dev/v4l-subdev0"
+    alt_min_m: 2.0        # approx 2.5 m inspection altitude
+    alt_max_m: 4.0        # approx scan altitude
+    focus_at_alt_min: 450 # closer subject -> higher focus_absolute
+    focus_at_alt_max: 250 # farther subject -> lower focus_absolute
+    focus_deadband_m: 0.30
+
+# ─── tools/test_vision (bench validation) ────────────────────────────────────
+test_vision:
+  ros__parameters:
+    capture_width:  1920
+    capture_height: 1080
+    preview_width:  480
+    preview_height: 270
+    preview_every_n_frames: 2
+    yolo_every_n_frames:    3
+    fps: 30
+    v4l2_subdev: "/dev/v4l-subdev0"
+    jpeg_save_quality: 80
+    output_dir: "tools/test_output"
+    altitude_default_m: 3.5
+    # ROS bridge: if rclpy is importable test_vision publishes live JPEGs
+    # so the real mission topics can be echoed with ros2 topic echo without
+    # flying the drone.  Throttled to ros_raw_publish_hz to keep the bus
+    # sane; annotated frames (YOLO/QR/crate) are always published.
+    ros_camera_topic:     "/ugv_camera/image_raw/compressed"
+    ros_annotated_topic:  "/mission/annotated/compressed"
+    ros_raw_publish_hz:   5.0

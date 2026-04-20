@@ -2,8 +2,12 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>uav_raspberry</name>
-  <version>0.0.0</version>
-  <description>UAV Raspberry Pi node – telemetry bridge between ArduPilot (MAVSDK) and ROS 2</description>
+  <version>1.0.0</version>
+  <description>
+    UAV reconnaissance mission stack for Raspberry Pi 5 + ArduPilot:
+    MAVSDK telemetry bridge, two-phase autonomous scan + identify, live CV
+    detection, YOLOv8 classification, QR decode, rich terminal GUI.
+  </description>
   <maintainer email="strategic.tech.pl@gmail.com">StrategicTech</maintainer>
   <license>Apache-2.0</license>
 
@@ -11,11 +15,17 @@
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>uav_msgs</depend>
-  <depend>cv_bridge</depend>
+  <depend>dualtech_msgs</depend>
   <depend>python3-opencv</depend>
-  <depend>foxglove_msgs</depend>
+  <depend>python3-numpy</depend>
+  <depend>python3-matplotlib</depend>
   <depend>launch</depend>
   <depend>launch_ros</depend>
+
+  <exec_depend>python3-rich</exec_depend>
+  <exec_depend>python3-pyzbar</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-picamera2</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

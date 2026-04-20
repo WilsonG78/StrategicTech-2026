@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m py_compile uav_raspberry/__init__.py uav_raspberry/telemetry_node.py uav_raspberry/run_mission.py uav_raspberry/mission/__init__.py uav_raspberry/mission/gps_utils.py uav_raspberry/mission/mavsdk_controller.py uav_raspberry/mission/camera_control.py uav_raspberry/mission/ros_publisher.py uav_raspberry/mission/phase1_scan.py uav_raspberry/mission/phase2_identify.py uav_raspberry/gui/__init__.py uav_raspberry/gui/terminal_gui.py)",
+      "Bash(python -m py_compile launch/uav.launch.py setup.py)",
+      "Bash(python *)"
+    ]
+  }
+}

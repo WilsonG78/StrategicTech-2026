@@ -1,17 +1,20 @@
 // camera_streamer_focus.cpp
-// ROS 2 node (C++) – camera stream + altitude-driven dynamic focus
+// ROS 2 node (C++) – camera stream + altitude-driven dynamic focus.
 //
-// Extends camera_streamer with a /data subscription (UavTelemetry).
-// When altitude_baro changes by more than FOCUS_DEADBAND_M the lens
-// position is updated via V4L2 ioctls on the camera subdevice.
+// Subscribes to /data (uav_msgs/UavTelemetry) and updates the RPi Camera
+// Module 3 focus via V4L2 ioctls whenever barometric altitude changes by
+// more than the configured deadband.
 //
-// RPi Camera Module 3 focus mapping
-//   focus_absolute 0   → infinity (far)
-//   focus_absolute 1000 → macro  (close)
-//   Formula: focus = clamp(int(FOCUS_GAIN / max(alt_m, 0.5)), 0, 1000)
-//   FOCUS_GAIN ≈ 600 gives ~200 at 3 m and ~240 at 2.5 m.
+// Focus mapping is a configurable LINEAR interpolation:
+//   alt_min_m -> focus_at_alt_min   (closer target, higher focus_absolute)
+//   alt_max_m -> focus_at_alt_max   (farther target, lower focus_absolute)
+// Values outside [alt_min, alt_max] are clamped.
+//
+// RPi Camera Module 3 lens range: focus_absolute 0 = infinity, 1000 = macro.
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -30,76 +33,78 @@
 #include "sensor_msgs/msg/compressed_image.hpp"
 #include "uav_msgs/msg/uav_telemetry.hpp"
 
-// ─── Configuration defaults ───────────────────────────────────────────────────
+namespace {
 
-static constexpr int    CAM_WIDTH        = 640;
-static constexpr int    CAM_HEIGHT       = 480;
-static constexpr int    CAM_FPS          = 30;
-static constexpr int    JPEG_QUALITY     = 50;
-static constexpr char   TOPIC[]          = "/ugv_camera/image_raw/compressed";
-static constexpr char   FRAME_ID[]       = "camera_frame";
-static constexpr int    QOS_DEPTH        = 5;
-static constexpr double FOCUS_DEADBAND_M = 0.3;   // min altitude change to re-focus
-static constexpr double FOCUS_GAIN       = 600.0;  // tunable per lens
+constexpr int  kDefaultWidth        = 1280;
+constexpr int  kDefaultHeight       = 720;
+constexpr int  kDefaultFps          = 30;
+constexpr int  kDefaultJpegQuality  = 60;
+constexpr char kDefaultTopic[]      = "/ugv_camera/image_raw/compressed";
+constexpr char kFrameId[]           = "camera_frame";
+constexpr int  kQosDepth            = 5;
 
-// ─── V4L2 focus helper ────────────────────────────────────────────────────────
-
-static bool v4l2_set_focus(const std::string & dev, int value)
+bool v4l2_set_focus(const std::string & dev, int value)
 {
-    int fd = open(dev.c_str(), O_RDWR | O_NONBLOCK);
+    int fd = ::open(dev.c_str(), O_RDWR | O_NONBLOCK);
     if (fd < 0) return false;
 
-    // Disable continuous autofocus
     v4l2_control ctrl{};
     ctrl.id    = V4L2_CID_FOCUS_AUTO;
     ctrl.value = 0;
-    ioctl(fd, VIDIOC_S_CTRL, &ctrl);
+    ::ioctl(fd, VIDIOC_S_CTRL, &ctrl);
 
-    // Set manual focus position
     ctrl.id    = V4L2_CID_FOCUS_ABSOLUTE;
     ctrl.value = value;
-    bool ok = (ioctl(fd, VIDIOC_S_CTRL, &ctrl) == 0);
+    bool ok = (::ioctl(fd, VIDIOC_S_CTRL, &ctrl) == 0);
 
-    close(fd);
+    ::close(fd);
     return ok;
 }
 
-static int altitude_to_focus(double alt_m)
-{
-    int val = static_cast<int>(FOCUS_GAIN / std::max(alt_m, 0.5));
-    return std::max(0, std::min(1000, val));
-}
-
-// ─── Node ─────────────────────────────────────────────────────────────────────
+}  // namespace
 
 class CameraStreamerFocus : public rclcpp::Node {
 public:
     CameraStreamerFocus() : Node("camera_streamer_focus")
     {
-        declare_parameter("width",          CAM_WIDTH);
-        declare_parameter("height",         CAM_HEIGHT);
-        declare_parameter("fps",            CAM_FPS);
-        declare_parameter("jpeg_quality",   JPEG_QUALITY);
-        declare_parameter("v4l2_subdev",    std::string("/dev/v4l-subdev0"));
-        declare_parameter("focus_gain",     FOCUS_GAIN);
+        declare_parameter("width",               kDefaultWidth);
+        declare_parameter("height",              kDefaultHeight);
+        declare_parameter("fps",                 kDefaultFps);
+        declare_parameter("jpeg_quality",        kDefaultJpegQuality);
+        declare_parameter("topic",               std::string(kDefaultTopic));
+        declare_parameter("v4l2_subdev",         std::string("/dev/v4l-subdev0"));
+        declare_parameter("alt_min_m",           0.5);
+        declare_parameter("alt_max_m",           5.0);
+        declare_parameter("focus_at_alt_min",    700);   // close -> high value
+        declare_parameter("focus_at_alt_max",    150);   // far   -> low  value
+        declare_parameter("focus_deadband_m",    0.30);
 
-        const int    w   = get_parameter("width").as_int();
-        const int    h   = get_parameter("height").as_int();
-        const int    fps = get_parameter("fps").as_int();
-        const int    q   = get_parameter("jpeg_quality").as_int();
-        subdev_  = get_parameter("v4l2_subdev").as_string();
-        focus_gain_ = get_parameter("focus_gain").as_double();
+        const int w          = get_parameter("width").as_int();
+        const int h          = get_parameter("height").as_int();
+        const int fps        = get_parameter("fps").as_int();
+        const int q          = get_parameter("jpeg_quality").as_int();
+        topic_               = get_parameter("topic").as_string();
+        subdev_              = get_parameter("v4l2_subdev").as_string();
+        alt_min_m_           = get_parameter("alt_min_m").as_double();
+        alt_max_m_           = get_parameter("alt_max_m").as_double();
+        focus_at_alt_min_    = get_parameter("focus_at_alt_min").as_int();
+        focus_at_alt_max_    = get_parameter("focus_at_alt_max").as_int();
+        focus_deadband_m_    = get_parameter("focus_deadband_m").as_double();
 
-        // ── GStreamer ─────────────────────────────────────────────────────
+        if (alt_max_m_ <= alt_min_m_) {
+            throw std::runtime_error(
+                "alt_max_m must be greater than alt_min_m");
+        }
+
         gst_init(nullptr, nullptr);
 
-        std::string pipeline_str =
-            "libcamerasrc af-mode=0 name=src ! "   // af-mode=0 = AfModeManual
-            "video/x-raw,width=" + std::to_string(w) +
-            ",height=" + std::to_string(h) +
-            ",framerate=" + std::to_string(fps) + "/1,format=NV12 ! "
+        const std::string pipeline_str =
+            "libcamerasrc af-mode=0 name=src ! "
+            "video/x-raw,width="  + std::to_string(w) +
+            ",height="            + std::to_string(h) +
+            ",framerate="         + std::to_string(fps) + "/1,format=NV12 ! "
             "videoconvert ! "
-            "jpegenc quality=" + std::to_string(q) + " ! "
+            "jpegenc quality="    + std::to_string(q) + " ! "
             "appsink name=sink sync=false drop=true max-buffers=1 emit-signals=true";
 
         RCLCPP_INFO(get_logger(), "Pipeline: %s", pipeline_str.c_str());
@@ -107,7 +112,7 @@ public:
         GError * err = nullptr;
         pipeline_ = gst_parse_launch(pipeline_str.c_str(), &err);
         if (!pipeline_ || err) {
-            std::string msg = err ? err->message : "unknown error";
+            const std::string msg = err ? err->message : "unknown error";
             if (err) g_error_free(err);
             throw std::runtime_error("GStreamer parse_launch: " + msg);
         }
@@ -118,30 +123,36 @@ public:
         g_signal_connect(sink_, "new-sample",
             G_CALLBACK(CameraStreamerFocus::on_new_sample_static), this);
 
-        auto qos = rclcpp::QoS(QOS_DEPTH)
+        auto qos = rclcpp::QoS(kQosDepth)
             .reliability(rclcpp::ReliabilityPolicy::BestEffort);
-        pub_ = create_publisher<sensor_msgs::msg::CompressedImage>(TOPIC, qos);
+        pub_ = create_publisher<sensor_msgs::msg::CompressedImage>(topic_, qos);
 
-        // ── /data subscription (altitude telemetry) ───────────────────────
         sub_telemetry_ = create_subscription<uav_msgs::msg::UavTelemetry>(
             "/data", rclcpp::QoS(5).best_effort(),
             [this](const uav_msgs::msg::UavTelemetry::SharedPtr msg) {
                 on_telemetry(msg);
             });
 
-        // Start pipeline
+        apply_focus(alt_min_m_);  // sensible default before first telemetry tick
+
         if (gst_element_set_state(pipeline_, GST_STATE_PLAYING)
-                == GST_STATE_CHANGE_FAILURE)
+                == GST_STATE_CHANGE_FAILURE) {
             throw std::runtime_error("Failed to start GStreamer pipeline");
+        }
 
         bus_thread_ = std::thread([this] { run_bus_loop(); });
 
         RCLCPP_INFO(get_logger(),
-            "CameraStreamerFocus: %dx%d @ %d fps  JPEG q=%d  subdev=%s",
-            w, h, fps, q, subdev_.c_str());
+            "CameraStreamerFocus: %dx%d @ %d fps  JPEG q=%d  topic=%s  subdev=%s",
+            w, h, fps, q, topic_.c_str(), subdev_.c_str());
+        RCLCPP_INFO(get_logger(),
+            "Focus map: %.2fm->%d, %.2fm->%d  deadband=%.2fm",
+            alt_min_m_, focus_at_alt_min_,
+            alt_max_m_, focus_at_alt_max_,
+            focus_deadband_m_);
     }
 
-    ~CameraStreamerFocus()
+    ~CameraStreamerFocus() override
     {
         bus_running_ = false;
         if (pipeline_) {
@@ -153,42 +164,60 @@ public:
     }
 
 private:
-    GstElement *           pipeline_{nullptr};
-    GstElement *           sink_{nullptr};
-    std::thread            bus_thread_;
-    std::atomic<bool>      bus_running_{true};
-    std::string            subdev_;
-    double                 focus_gain_{FOCUS_GAIN};
+    GstElement *       pipeline_{nullptr};
+    GstElement *       sink_{nullptr};
+    std::thread        bus_thread_;
+    std::atomic<bool>  bus_running_{true};
 
-    double                 last_focus_alt_m_{-999.0};
-    std::mutex             focus_mutex_;
+    std::string        topic_;
+    std::string        subdev_;
+    double             alt_min_m_{0.5};
+    double             alt_max_m_{5.0};
+    int                focus_at_alt_min_{700};
+    int                focus_at_alt_max_{150};
+    double             focus_deadband_m_{0.30};
+
+    double             last_focus_alt_m_{-999.0};
+    std::mutex         focus_mutex_;
 
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr pub_;
     rclcpp::Subscription<uav_msgs::msg::UavTelemetry>::SharedPtr    sub_telemetry_;
 
-    // ── Telemetry callback → update focus if altitude changed enough ──────
+    int altitude_to_focus(double alt_m) const
+    {
+        const double clamped = std::clamp(alt_m, alt_min_m_, alt_max_m_);
+        const double t = (clamped - alt_min_m_) / (alt_max_m_ - alt_min_m_);
+        const double f = focus_at_alt_min_
+                       + t * (focus_at_alt_max_ - focus_at_alt_min_);
+        return std::clamp(static_cast<int>(std::lround(f)), 0, 1000);
+    }
+
+    void apply_focus(double alt_m)
+    {
+        const int focus_val = altitude_to_focus(alt_m);
+        const bool ok = v4l2_set_focus(subdev_, focus_val);
+        if (ok) {
+            RCLCPP_DEBUG(get_logger(),
+                "Focus updated -> alt=%.2fm focus_absolute=%d",
+                alt_m, focus_val);
+        } else {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000,
+                "v4l2_set_focus failed on %s (focus=%d) - check subdev path",
+                subdev_.c_str(), focus_val);
+        }
+    }
+
     void on_telemetry(const uav_msgs::msg::UavTelemetry::SharedPtr msg)
     {
         const double alt = msg->altitude_baro;
         if (std::isnan(alt) || alt < 0.0) return;
 
         std::lock_guard<std::mutex> lk(focus_mutex_);
-        if (std::abs(alt - last_focus_alt_m_) < FOCUS_DEADBAND_M) return;
+        if (std::abs(alt - last_focus_alt_m_) < focus_deadband_m_) return;
         last_focus_alt_m_ = alt;
-
-        int focus_val = altitude_to_focus(alt);
-        bool ok = v4l2_set_focus(subdev_, focus_val);
-        if (ok) {
-            RCLCPP_DEBUG(get_logger(),
-                "Focus updated → alt=%.2f m  focus_absolute=%d", alt, focus_val);
-        } else {
-            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000,
-                "v4l2_set_focus failed on %s (focus=%d) – check subdev path",
-                subdev_.c_str(), focus_val);
-        }
+        apply_focus(alt);
     }
 
-    // ── GStreamer frame callback ───────────────────────────────────────────
     static GstFlowReturn on_new_sample_static(GstAppSink * /*sink*/, gpointer data)
     {
         return static_cast<CameraStreamerFocus *>(data)->on_new_sample();
@@ -199,13 +228,13 @@ private:
         GstSample * sample = gst_app_sink_pull_sample(GST_APP_SINK(sink_));
         if (!sample) return GST_FLOW_ERROR;
 
-        GstBuffer * buf  = gst_sample_get_buffer(sample);
+        GstBuffer * buf = gst_sample_get_buffer(sample);
         GstMapInfo  info{};
 
         if (gst_buffer_map(buf, &info, GST_MAP_READ)) {
             sensor_msgs::msg::CompressedImage out;
             out.header.stamp    = now();
-            out.header.frame_id = FRAME_ID;
+            out.header.frame_id = kFrameId;
             out.format          = "jpeg";
             out.data.assign(info.data, info.data + info.size);
             pub_->publish(out);
@@ -216,7 +245,6 @@ private:
         return GST_FLOW_OK;
     }
 
-    // ── GStreamer bus error loop ───────────────────────────────────────────
     void run_bus_loop()
     {
         GstBus * bus = gst_element_get_bus(pipeline_);
@@ -230,14 +258,16 @@ private:
                 case GST_MESSAGE_ERROR: {
                     GError * e{}; gchar * d{};
                     gst_message_parse_error(msg, &e, &d);
-                    RCLCPP_ERROR(get_logger(), "GStreamer error: %s (%s)", e->message, d);
+                    RCLCPP_ERROR(get_logger(),
+                        "GStreamer error: %s (%s)", e->message, d);
                     g_error_free(e); g_free(d);
                     break;
                 }
                 case GST_MESSAGE_WARNING: {
                     GError * e{}; gchar * d{};
                     gst_message_parse_warning(msg, &e, &d);
-                    RCLCPP_WARN(get_logger(), "GStreamer warning: %s (%s)", e->message, d);
+                    RCLCPP_WARN(get_logger(),
+                        "GStreamer warning: %s (%s)", e->message, d);
                     g_error_free(e); g_free(d);
                     break;
                 }
@@ -251,8 +281,6 @@ private:
         gst_object_unref(bus);
     }
 };
-
-// ─── main ─────────────────────────────────────────────────────────────────────
 
 int main(int argc, char ** argv)
 {

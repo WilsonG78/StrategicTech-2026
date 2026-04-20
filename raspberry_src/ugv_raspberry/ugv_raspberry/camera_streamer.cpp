@@ -8,9 +8,11 @@
 //   -r in/compressed:=/camera/image/compressed
 // Or use rqt_image_view directly.
 
+#include <atomic>
 #include <cstring>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <gst/gst.h>
